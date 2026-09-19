@@ -1,0 +1,77 @@
+name: Setup XFCE Runner + Tailscale + noVNC
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  setup-gui-runner:
+    runs-on: ubuntu-latest
+    env:
+      TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+      USERNAME: runner
+      PASSWORD: runner
+      TAILSCALE_HOSTNAME: gh-xfce-novnc-${{ github.run_id }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure runner user has sudo
+        run: |
+          echo "${USERNAME}:${PASSWORD}" | sudo chpasswd
+          echo "${USERNAME} ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/${USERNAME}
+
+      - name: Install XFCE + VNC server
+        run: |
+          echo ">>> Installing lightweight XFCE Desktop + VNC..."
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq xfce4 xfce4-goodies xorg dbus-x11 tigervnc-standalone-server tigervnc-common
+
+          # Configure VNC password for the runner
+          mkdir -p /home/${USERNAME}/.vnc
+          echo ${PASSWORD} | vncpasswd -f > /home/${USERNAME}/.vnc/passwd
+          chmod 600 /home/${USERNAME}/.vnc/passwd
+          chown -R ${USERNAME}:${USERNAME} /home/${USERNAME}/.vnc
+
+          # Start XFCE when VNC launches
+          echo "startxfce4" > /home/${USERNAME}/.xsession
+          chown ${USERNAME}:${USERNAME} /home/${USERNAME}/.xsession
+
+      - name: Install noVNC + websockify
+        run: |
+          echo ">>> Installing noVNC..."
+          sudo apt-get install -y -qq git python3-websockify
+          git clone https://github.com/novnc/noVNC.git /opt/noVNC
+          ln -s /opt/noVNC/vnc.html /opt/noVNC/index.html
+
+      - name: Install Tailscale
+        run: |
+          echo ">>> Installing Tailscale..."
+          curl -fsSL https://tailscale.com/install.sh | sudo sh
+          sudo tailscale up --authkey "${TAILSCALE_AUTHKEY}" --hostname "${TAILSCALE_HOSTNAME}"
+
+      - name: Start VNC + noVNC proxy + Show URL
+        run: |
+          echo ">>> Starting VNC server..."
+          sudo -u ${USERNAME} vncserver :1 -geometry 1280x800 -depth 24
+
+          echo ">>> Starting noVNC websockify..."
+          nohup websockify --web=/opt/noVNC 6080 localhost:5901 &
+
+          # Get Tailscale IP
+          TAILSCALE_IP=$(tailscale ip -4 | head -n1)
+
+          echo "=== CONNECTION INFO ==="
+          echo "USERNAME: ${USERNAME}"
+          echo "PASSWORD: ${PASSWORD}"
+          echo "noVNC URL:"
+          echo "    http://${TAILSCALE_IP}:6080/vnc.html"
+          echo
+          echo "This method is provided by @MR_English2008 on Telegram."
+          echo "For more methods, join: https://t.me/ME2008_RDP"
+          echo ">>> Keeping runner alive..."
+          while true; do
+            sleep 600
+          done
